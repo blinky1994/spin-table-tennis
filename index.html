@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spin — Table Tennis</title>
+<style>
+  :root { --fg: #eef2ff; --dim: #9aa6c8; --acc: #ff8c1a; --panel: rgba(10, 14, 30, 0.82); }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0f1e; color: var(--fg); font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; }
+  #app canvas { display: block; }
+  .hud { position: fixed; pointer-events: none; }
+  #board { top: 14px; left: 16px; display: flex; align-items: center; gap: 14px; background: var(--panel); border: 1px solid #2a3560; border-radius: 12px; padding: 8px 18px; font-weight: 700; }
+  #board .name { font-size: 13px; letter-spacing: .12em; color: var(--dim); }
+  #board .pts { font-size: 34px; min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+  #board .games { font-size: 13px; color: var(--acc); }
+  #board .srv { color: var(--acc); font-size: 14px; }
+  #board .sep { color: #3a4570; font-size: 26px; }
+  #shot { bottom: 16px; left: 16px; background: var(--panel); border-radius: 10px; padding: 8px 14px; font-size: 14px; color: var(--fg); min-height: 18px; }
+  #shot b { color: var(--acc); }
+  #gauge { bottom: 16px; right: 16px; background: var(--panel); border-radius: 12px; border: 1px solid #2a3560; }
+  #hint { bottom: 64px; left: 50%; transform: translateX(-50%); font-size: 16px; color: #ffe07a; text-shadow: 0 2px 6px #000; }
+  #rally { top: 78px; left: 24px; font-size: 13px; color: var(--dim); }
+  #slowmo { top: 84px; right: 16px; color: #7ac8ff; font-weight: 700; display: none; }
+  #msg { top: 34%; left: 50%; transform: translate(-50%, -50%) scale(.9); text-align: center; opacity: 0; transition: opacity .2s, transform .2s; }
+  #msg.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #msg-title { font-size: 46px; font-weight: 900; letter-spacing: .04em; text-shadow: 0 4px 18px rgba(0,0,0,.8); }
+  #msg-sub { font-size: 17px; color: var(--fg); text-shadow: 0 2px 8px #000; margin-top: 4px; }
+  #cross { top: 50%; left: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: rgba(255,255,255,.25); }
+
+  .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(5, 8, 20, 0.55); backdrop-filter: blur(3px); }
+  .overlay.show { display: flex; }
+  .card { background: var(--panel); border: 1px solid #2a3560; border-radius: 18px; padding: 28px 34px; width: min(560px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  h1 { margin: 0; font-size: 54px; letter-spacing: .06em; font-weight: 900; }
+  h1 span { color: var(--acc); }
+  .tag { color: var(--dim); margin: 2px 0 20px; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
+  .row label { width: 110px; color: var(--dim); font-size: 14px; }
+  button { font: inherit; cursor: pointer; border: 1px solid #34407a; background: #151c38; color: var(--fg); border-radius: 10px; padding: 8px 14px; font-weight: 600; }
+  button.on { background: var(--acc); border-color: var(--acc); color: #1a0e00; }
+  button.big { width: 100%; margin-top: 16px; padding: 14px; font-size: 18px; background: var(--acc); color: #1a0e00; border: none; }
+  input[type=range] { flex: 1; accent-color: var(--acc); }
+  .help { margin-top: 18px; font-size: 13.5px; color: var(--dim); line-height: 1.6; border-top: 1px solid #243056; padding-top: 12px; }
+  .help b { color: var(--fg); }
+  .center { text-align: center; }
+  .filebtn { width: auto !important; cursor: pointer; border: 1px solid #34407a; background: #151c38; color: var(--fg) !important; border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: 14px; }
+  .small { font-size: 12px; color: var(--dim); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="board" class="hud">
+  <span class="srv" id="srv-you">●</span><span class="name">YOU</span>
+  <span class="games" id="g-you">0</span><span class="pts" id="s-you">0</span>
+  <span class="sep">:</span>
+  <span class="pts" id="s-cpu">0</span><span class="games" id="g-cpu">0</span>
+  <span class="name">CPU</span><span class="srv" id="srv-cpu">●</span>
+</div>
+<div id="rally" class="hud"></div>
+<div id="slowmo" class="hud">SLOW-MO</div>
+<div id="msg" class="hud"><div id="msg-title"></div><div id="msg-sub"></div></div>
+<div id="hint" class="hud"></div>
+<div id="shot" class="hud">Hit the ball to see its speed and spin</div>
+<canvas id="gauge" class="hud" width="170" height="110"></canvas>
+
+<div id="menu" class="overlay show">
+  <div class="card">
+    <h1>SP<span>I</span>N</h1>
+    <div class="tag">First-person table tennis with real ball physics</div>
+    <div class="row"><label>Opponent</label>
+      <button data-diff="0">Rookie</button><button data-diff="1" class="on">Club</button><button data-diff="2">Pro</button></div>
+    <div class="row"><label>Game pace</label>
+      <button data-pace="1">Normal</button><button data-pace="0.85">Relaxed</button><button data-pace="0.7" class="on">Slow</button><button data-pace="0.55">Very slow</button></div>
+    <div class="row"><label>Match</label>
+      <button data-best="1">1 game</button><button data-best="3" class="on">Best of 3</button><button data-best="5">Best of 5</button></div>
+    <div class="row"><label>Tribute photo</label>
+      <label class="filebtn">Choose image…<input id="tribute-file" type="file" accept="image/*" hidden></label>
+      <span class="small">shown on the Ma Long banner (or drop an image anywhere)</span></div>
+    <div class="row"><label>Mouse speed</label><input id="sens" type="range" min="0.05" max="1" step="0.01" value="0.2"><span id="sens-v">0.20×</span></div>
+    <button id="start" class="big">PLAY</button>
+    <div class="help">
+      <b>Move the mouse</b> to move your paddle left/right and toward/away from the net. Height follows the ball.<br>
+      <b>Swing</b> by pushing the mouse forward quickly. Swings naturally travel low to high, like a real stroke.<br>
+      <b>Scroll wheel</b> sets your resting face angle (slightly open / closed). <b>Middle click</b> resets it.<br>
+      <b>Hold left</b> to snap the face <b>closed</b> (topspin, lower), <b>hold right</b> to snap it <b>open</b> (backspin, lift).<br>
+      The gauge shows your face angle. The dashed ghost is the angle that would land the ball.<br>
+      Your face angle is yours, and at contact it's fine-tuned by a few degrees toward one that lands.<br>
+      <b>[ ]</b> or <b>− +</b> change mouse speed in game.<br>
+      <b>Serving:</b> the mouse aims (orange marker), the wheel dials top/backspin, flick sideways as you click for sidespin, then <b>click</b> (or Space) and it serves automatically · <b>Q</b> slow motion · <b>Esc</b> pause. Official rules: 11 points, win by 2.
+    </div>
+  </div>
+</div>
+
+<div id="pause" class="overlay">
+  <div class="card center">
+    <h1 style="font-size:40px">PAUSED</h1>
+    <div class="tag">Click resume to grab the mouse again</div>
+    <button id="resume" class="big">RESUME</button>
+    <button id="quit" style="margin-top:10px;width:100%">Quit to menu</button>
+  </div>
+</div>
+
+<div id="over" class="overlay">
+  <div class="card center">
+    <h1 id="over-title" style="font-size:44px"></h1>
+    <div class="tag" id="over-sub"></div>
+    <button id="again" class="big">PLAY AGAIN</button>
+    <button id="tomenu" style="margin-top:10px;width:100%">Menu</button>
+  </div>
+</div>
+
+<script src="js/physics.js"></script>
+<script src="js/athlete.js"></script>
+<script src="js/arena.js"></script>
+<script type="module">
+  import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+  window.THREE = THREE;
+  const s = document.createElement('script');
+  s.src = 'js/main.js';
+  document.body.appendChild(s);
+</script>
+</body>
+</html>
