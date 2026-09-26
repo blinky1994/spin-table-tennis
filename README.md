@@ -14,9 +14,9 @@ A browser table tennis game played in first person with the mouse, built on a re
 ### With a friend
 Click **Play with a friend**, copy the invite link and send it. When your friend opens it you'll see them join. Press **Start match**, and they click once to take control of their paddle.
 
-- The two browsers connect directly to each other (WebRTC via [PeerJS](https://peerjs.com)). PeerJS's free public broker only introduces them, and there's no game server.
+- The two browsers first try to connect directly (WebRTC via [PeerJS](https://peerjs.com)), which gives the lowest delay.
+- If a router or mobile network blocks that, the game automatically falls back to relaying messages through a free public MQTT broker (HiveMQ, EMQX or Mosquitto) over a secure WebSocket. That works on practically any network, with some extra delay that the game compensates for. Add `?relay` before the `#join=` part of a link to force the relay.
 - Each player sees the match from their own end. The player whose half the ball is on rules on bounces and points, and hits are sent instantly with the receiver catching the ball up by the network delay.
-- A few strict networks (some offices or schools) block direct connections. Home Wi-Fi and mobile data normally work.
 
 ## Running locally
 Serve the folder with any static web server (ES modules + a CDN copy of three.js), e.g.

@@ -1112,7 +1112,7 @@
     try {
       const id = await Net.host();
       G.net = { role: 'host' };
-      const link = location.origin + location.pathname + '#join=' + id;
+      const link = location.origin + location.pathname + '#join=' + id + '&r=' + Net.broker;
       lobby('Send this link to your friend, then wait here for them to join…', { link });
     } catch (e) { lobby('Could not reach the connection service. Check your internet and try again.'); }
   });
@@ -1125,10 +1125,13 @@
   $('lobby-start').addEventListener('click', hostStartMatch);
   $('lobby-cancel').addEventListener('click', () => leaveOnline());
 
-  Net.on('connected', () => {
-    if (Net.role === 'host') lobby('Your friend joined! Press Start when you are both ready.', { start: true, help: false });
-    else lobby('Connected! Waiting for your friend to start the match…', { help: false });
+  Net.on('connected', (e) => {
+    const via = e && e.transport === 'relay' ? ' (via relay — your network blocked a direct link, expect a little extra delay)' : ' (direct connection)';
+    if (Net.role === 'host') lobby('Your friend joined!' + via + ' Press Start when you are both ready.', { start: true, help: false });
+    else lobby('Connected' + via + '. Waiting for your friend to start the match…', { help: false });
   });
+  Net.on('status', (t) => { if (!Net.connected && Net.role === 'guest') lobby(t, { help: false }); });
+  Net.on('failed', () => lobby('Could not connect to your friend. Make sure they still have the game open on the invite screen, then open the link again.', { help: false }));
   Net.on('closed', () => { if (G.net) leaveOnline('Friend disconnected'); });
   Net.on('bye', () => { if (G.net) leaveOnline('Friend left the game'); });
   Net.on('error', (e) => {
@@ -1156,7 +1159,7 @@
     showShot(oppName(), describeShot(ball));
     onPaddle(1);
     // catch the ball up by the time the message spent travelling
-    let t = Math.min(0.25, Net.rtt / 2) * G.timeScale;
+    let t = Math.min(0.4, Net.rtt / 2) * G.timeScale;
     while (t > 1e-6) {
       const h = Math.min(0.001, t), bPrev = cp(ball.p);
       PHYS.step(ball, h, worldEvent);
@@ -1171,11 +1174,12 @@
   // opened an invite link?
   (function checkInvite() {
     const m = location.hash.match(/join=([A-Za-z0-9_-]+)/);
+    const rb = location.hash.match(/[&#]r=(\d)/);
     if (!m) return;
     G.net = { role: 'guest' };
     $('menu').classList.remove('show');
     lobby('Connecting to your friend…', { help: false });
-    Net.join(m[1]).catch(() => {});
+    Net.join(m[1], rb ? +rb[1] : 0);
   })();
 
   // menu wiring
