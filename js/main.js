@@ -886,7 +886,7 @@
     const cx = pad.mx * 0.6 + lerp(-0.28, 0.22, pad.bh);   // left of a forehand, right of a backhand
     camera.position.x += (cx - camera.position.x) * ease(2.6);
     // lean in over the table when you reach forward
-    const camZ = clamp(pad.mz + 1.1, 1.25, 2.85);
+    const camZ = clamp(pad.mz + 1.1, 1.25, 3.7);   // backs up with you so the paddle stays in view
     camera.position.z += (camZ - camera.position.z) * ease(2.2);
     camera.position.y = 1.55;
     camLook.x += (camera.position.x * 0.3 + (pad.mx - camera.position.x) * 0.15 - camLook.x) * ease(2.0);
