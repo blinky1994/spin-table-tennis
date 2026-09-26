@@ -42,6 +42,8 @@
   .help { margin-top: 18px; font-size: 13.5px; color: var(--dim); line-height: 1.6; border-top: 1px solid #243056; padding-top: 12px; }
   .help b { color: var(--fg); }
   .center { text-align: center; }
+  button.big.alt { background: #1f4fa8; color: #fff; margin-top: 10px; }
+  #lobby-link { flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 9px 10px; border-radius: 10px; border: 1px solid #34407a; background: #0d1330; color: var(--fg); }
   .filebtn { width: auto !important; cursor: pointer; border: 1px solid #34407a; background: #151c38; color: var(--fg) !important; border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: 14px; }
   .small { font-size: 12px; color: var(--dim); }
 </style>
@@ -54,7 +56,7 @@
   <span class="games" id="g-you">0</span><span class="pts" id="s-you">0</span>
   <span class="sep">:</span>
   <span class="pts" id="s-cpu">0</span><span class="games" id="g-cpu">0</span>
-  <span class="name">CPU</span><span class="srv" id="srv-cpu">●</span>
+  <span class="name" id="name-opp">CPU</span><span class="srv" id="srv-cpu">●</span>
 </div>
 <div id="rally" class="hud"></div>
 <div id="slowmo" class="hud">SLOW-MO</div>
@@ -77,7 +79,8 @@
       <label class="filebtn">Choose image…<input id="tribute-file" type="file" accept="image/*" hidden></label>
       <span class="small">shown on the Ma Long banner (or drop an image anywhere)</span></div>
     <div class="row"><label>Mouse speed</label><input id="sens" type="range" min="0.05" max="1" step="0.01" value="0.2"><span id="sens-v">0.20×</span></div>
-    <button id="start" class="big">PLAY</button>
+    <button id="start" class="big">PLAY VS CPU</button>
+    <button id="online" class="big alt">PLAY WITH A FRIEND</button>
     <div class="help">
       <b>Move the mouse</b> to move your paddle left/right and toward/away from the net. Height follows the ball.<br>
       <b>Swing</b> by pushing the mouse forward quickly. Swings naturally travel low to high, like a real stroke.<br>
@@ -93,10 +96,24 @@
 
 <div id="pause" class="overlay">
   <div class="card center">
-    <h1 style="font-size:40px">PAUSED</h1>
-    <div class="tag">Click resume to grab the mouse again</div>
+    <h1 style="font-size:40px" id="pause-title">PAUSED</h1>
+    <div class="tag" id="pause-tag">Click resume to grab the mouse again</div>
     <button id="resume" class="big">RESUME</button>
     <button id="quit" style="margin-top:10px;width:100%">Quit to menu</button>
+  </div>
+</div>
+
+<div id="lobby" class="overlay">
+  <div class="card center">
+    <h1 style="font-size:34px">PLAY WITH A FRIEND</h1>
+    <div class="tag" id="lobby-status">Setting up your table…</div>
+    <div class="row" id="lobby-linkrow" style="display:none">
+      <input id="lobby-link" readonly>
+      <button id="lobby-copy">Copy link</button>
+    </div>
+    <button id="lobby-start" class="big" style="display:none">START MATCH</button>
+    <button id="lobby-cancel" style="margin-top:10px;width:100%">Cancel</button>
+    <div class="help" id="lobby-help">Send the link to a friend. When they open it you'll see them connect, then press Start. The two browsers connect directly to each other. Your Game pace and Match length settings are used.</div>
   </div>
 </div>
 
@@ -109,7 +126,9 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="js/physics.js"></script>
+<script src="js/net.js"></script>
 <script src="js/athlete.js"></script>
 <script src="js/arena.js"></script>
 <script type="module">

@@ -47,7 +47,7 @@ function buildArena(T, scene, renderer) {
       g.fillStyle = '#05060c'; g.fillRect(0, 0, c.width, c.height);
       g.strokeStyle = '#c8242a'; g.lineWidth = 6; g.strokeRect(3, 3, c.width - 6, c.height - 6);
       g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillStyle = '#9aa6c8'; g.font = 'bold 30px Arial'; g.fillText('YOU', 128, 46); g.fillText('CPU', 384, 46);
+      g.fillStyle = '#9aa6c8'; g.font = 'bold 30px Arial'; g.fillText('YOU', 128, 46); g.fillText(d.oppLabel || 'CPU', 384, 46);
       g.fillStyle = '#ffffff'; g.font = 'bold 120px Arial';
       g.fillText(String(d.score[0]), 128, 150); g.fillText(String(d.score[1]), 384, 150);
       g.fillStyle = '#f4d03f'; g.font = 'bold 30px Arial';

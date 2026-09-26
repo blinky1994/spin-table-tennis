@@ -255,7 +255,13 @@
   //  Rules
   // ===================================================================
   const sideOf = (z) => (z > 0 ? 0 : 1);   // 0 = you (near side), 1 = CPU
-  const who = (i) => (i === 0 ? 'You' : 'CPU');
+  const oppName = () => (G.net ? 'Friend' : 'CPU');
+  const who = (i) => (i === 0 ? 'You' : oppName());
+  // ---- online helpers: each browser sees itself on the near side (z > 0); messages are mirrored
+  const mir = (a) => v3(-a.x, a.y, -a.z);            // 180° turn about the vertical axis (also right for spin)
+  const netAuthority = () => ball.p.z > 0;           // the player whose half the ball is on rules on it
+  const swapNames = (t) => String(t).replace(/\bYou\b/g, '\u0001').replace(/\bFriend\b/g, 'You').replace(/\u0001/g, 'Friend');
+  const remote = { p: null, bh: 0 };
 
   function nextServer() {
     const total = G.score[0] + G.score[1];
@@ -263,16 +269,21 @@
     return (G.firstServer + Math.floor(total / 2)) % 2;
   }
 
-  function award(winner, reason) {
+  function award(winner, reason, fromNet) {
     if (G.phase !== 'rally' && G.phase !== 'toss') return;
+    if (G.net && !fromNet) {
+      if (!netAuthority()) return;                     // the other browser rules on this one
+      Net.send({ t: 'point', winner, reason });
+    }
     G.phase = 'point'; G.phaseT = 0;
     G.score[winner]++;
-    G.pointMsg = `${winner === 0 ? 'YOUR POINT' : 'CPU POINT'}`;
+    G.pointMsg = `${winner === 0 ? 'YOUR POINT' : oppName().toUpperCase() + ' POINT'}`;
     showMsg(G.pointMsg, reason, winner === 0 ? '#7dffa0' : '#ff8a7a');
     Snd.point(winner === 0);
     ai.plan = null;
   }
-  function letServe() {
+  function letServe(fromNet) {
+    if (G.net && !fromNet) { if (!netAuthority()) return; Net.send({ t: 'let' }); }
     G.phase = 'point'; G.phaseT = 0;
     showMsg('LET', 'net on serve — replay', '#ffe07a');
   }
@@ -284,7 +295,7 @@
       G.games[w]++;
       const need = Math.ceil(G.bestOf / 2);
       if (G.games[w] >= need) { endMatch(w); return; }
-      showMsg(`GAME ${w === 0 ? 'YOU' : 'CPU'}`, `${a} – ${b}  ·  games ${G.games[0]} – ${G.games[1]}`, '#ffe07a');
+      showMsg(`GAME ${w === 0 ? 'YOU' : oppName().toUpperCase()}`, `${a} – ${b}  ·  games ${G.games[0]} – ${G.games[1]}`, '#ffe07a');
       G.score = [0, 0];
       G.firstServer = 1 - G.firstServer;
     }
@@ -548,6 +559,7 @@
     const ns = scl(pad.n, s);   // the face the ball approached (not re-decided after the wrist adjustment)
     const vin = len(sub(ball.v, vHit));
     PHYS.surfaceHit(ball, ns, vHit, MAT.paddle.e, MAT.paddle.mu);
+    if (G.net) Net.send({ t: 'hit', p: cp(ball.p), v: cp(ball.v), w: cp(ball.w) });
     pad.cd = 0.1;
     Snd.paddle(vin, clamp(ball.p.x, -1, 1));
     showShot('You', describeShot(ball));
@@ -661,6 +673,7 @@
     G.autoServe = { side: Math.abs(f) < dead ? 0 : clamp((f - Math.sign(f) * dead) / 80, -1, 1) };
     toss(0);
     ball.v = v3(0, 2.2, 0);   // quick ~25 cm toss
+    if (G.net) Net.send({ t: 'toss', p: cp(ball.p), v: cp(ball.v) });
   }
   function playerAutoServe() {
     const a = G.autoServe; G.autoServe = null;
@@ -676,6 +689,7 @@
       ball.v = add(scl(shot.dir, spd * Math.cos(e)), v3(0, spd * Math.sin(e), 0));
       ball.w = shot.w;
     } else { ball.v = v3(0, -1.2, -4.2); ball.w = v3(-80, 0, 0); }
+    if (G.net) Net.send({ t: 'hit', p: cp(ball.p), v: cp(ball.v), w: cp(ball.w) });
     pad.mz = Math.max(pad.mz - 0.25, ball.p.z + 0.03);   // follow-through
     pad.cd = 0.3;
     Snd.paddle(len(ball.v), clamp(ball.p.x, -1, 1));
@@ -707,6 +721,14 @@
   function updateAI(dt) {
     const D = DIFFS[G.diff];
     ai.prev = cp(ai.p);
+    if (G.net) {   // online: the opponent is your friend's paddle, streamed and smoothed
+      if (remote.p) ai.p = lerpV(ai.p, remote.p, 1 - Math.exp(-18 * dt));
+      ai.bhSide = remote.bh > 0.5 ? 1 : 0;
+      ai.bh = (ai.bh || 0) + (remote.bh - (ai.bh || 0)) * (1 - Math.exp(-12 * dt));
+      ai.v = scl(sub(ai.p, ai.prev), 1 / Math.max(dt, 1e-4));
+      ai.swing = Math.max(0, ai.swing - dt * 4);
+      return;
+    }
     let target = v3(clamp(ball.p.x * 0.5, -0.5, 0.5), 1.0, -1.95);
     let fast = false;
     if (G.phase === 'serve' && G.server === 1) {
@@ -737,6 +759,7 @@
   }
 
   function aiContactCheck() {
+    if (G.net) return;
     if (ai.cd > 0 || G.phase !== 'rally' || !ai.plan || !ai.plan.hit) return;
     const r = G.rally;
     if (r.lastHitter !== 0 || r.recvBounces !== 1) return;
@@ -760,6 +783,7 @@
     mouse.flick *= Math.exp(-12 * dt);
     if (G.phase === 'serve') {
       if (G.server === 0) ball.p = v3(pad.p.x - 0.04, 0.98, SERVE_Z);   // tossed from just behind the end line
+      else if (G.net) ball.p = v3(ai.p.x + 0.04, 0.98, -SERVE_Z);   // friend's toss position (mirrored)
       else { ai.serveX = ai.serveX ?? 0.2; ball.p = v3(ai.serveX + 0.2, 0.98, -1.52); }
       ball.v = v3(); ball.w = v3();
     } else {
@@ -772,7 +796,7 @@
         aiContactCheck();
       }
     }
-    if (G.phase === 'toss' && ball.v.y < 0 && ball.p.y < TOP + 0.05) {
+    if (G.phase === 'toss' && ball.v.y < 0 && ball.p.y < TOP + 0.05 && !(G.net && G.server === 1)) {
       showMsg('Toss again', 'hit the ball before it drops below the table', '#ffe07a');
       startServe();
     }
@@ -785,6 +809,7 @@
 
     trailPts.push(cp(ball.p));
     if (trailPts.length > TRAIL_N) trailPts.shift();
+    if (G.net) { G.netSendT = (G.netSendT || 0) - dt; if (G.netSendT <= 0) { G.netSendT = 0.033; Net.send({ t: 'pad', p: cp(pad.p), bh: pad.bh }); } }
   }
 
   // ===================================================================
@@ -913,7 +938,7 @@
   }
   let lastBoard = '';
   function updateHUD() {
-    const key = G.score.join() + G.games.join() + G.server;
+    const key = G.score.join() + G.games.join() + G.server + G.oppLabel;
     if (key !== lastBoard) { lastBoard = key; arena.setScore(G); }
     $('s-you').textContent = G.score[0];
     $('s-cpu').textContent = G.score[1];
@@ -969,7 +994,7 @@
       const sp = G.serveSpin, spinTxt = sp > 0.08 ? `topspin ${Math.round(sp * 100)}%` : sp < -0.08 ? `backspin ${Math.round(-sp * 100)}%` : 'no spin';
       hint = `Your serve — mouse aims · wheel: ${spinTxt} · flick sideways as you click for sidespin · CLICK to serve`;
     }
-    else if (G.phase === 'serve' || (G.phase === 'toss' && G.server === 1)) hint = 'CPU serving…';
+    else if (G.phase === 'serve' || (G.phase === 'toss' && G.server === 1)) hint = `${oppName()} serving…`;
     else if (G.phase === 'toss') hint = 'Swing!';
     $('hint').textContent = hint;
     $('rally').textContent = G.rallyLen > 2 ? `rally ${G.rallyLen}` : '';
@@ -980,21 +1005,24 @@
   function endMatch(w) {
     G.matchOver = true; G.mode = 'over'; G.phase = 'over';
     document.exitPointerLock && document.exitPointerLock();
-    $('over-title').textContent = w === 0 ? 'YOU WIN!' : 'CPU WINS';
-    $('over-sub').textContent = `Games ${G.games[0]} – ${G.games[1]}  ·  ${DIFFS[G.diff].name}`;
+    $('over-title').textContent = w === 0 ? 'YOU WIN!' : `${oppName().toUpperCase()} WINS`;
+    $('over-sub').textContent = `Games ${G.games[0]} – ${G.games[1]}  ·  ${G.net ? 'online match' : DIFFS[G.diff].name}`;
     $('over').classList.add('show');
   }
 
-  function newMatch() {
+  function newMatch(firstServer) {
     G.score = [0, 0]; G.games = [0, 0]; G.matchOver = false;
-    G.firstServer = Math.random() < 0.5 ? 0 : 1;
+    G.firstServer = firstServer ?? (Math.random() < 0.5 ? 0 : 1);
+    G.oppLabel = G.net ? 'FRIEND' : 'CPU';
+    $('name-opp').textContent = G.oppLabel;
     G.server = G.firstServer;
     pad.mx = 0.2; pad.mz = 1.8;
     startServe();
-    showMsg(G.server === 0 ? 'YOU SERVE FIRST' : 'CPU SERVES FIRST', `first to 11 · best of ${G.bestOf}`, '#ffe07a');
+    showMsg(G.server === 0 ? 'YOU SERVE FIRST' : `${oppName().toUpperCase()} SERVES FIRST`, `first to 11 · best of ${G.bestOf}`, '#ffe07a');
   }
 
   function startGame() {
+    if (G.net) { Net.close(); G.net = null; }
     Snd.init();
     $('menu').classList.remove('show');
     $('over').classList.remove('show');
@@ -1035,6 +1063,121 @@
   const tribInput = document.getElementById('tribute-file');
   if (tribInput) tribInput.addEventListener('change', () => loadTributeFile(tribInput.files[0]));
 
+  // ===================================================================
+  //  Online play (peer-to-peer)
+  // ===================================================================
+  function lobby(status, opts = {}) {
+    $('lobby').classList.add('show');
+    $('lobby-status').textContent = status;
+    $('lobby-linkrow').style.display = opts.link ? 'flex' : 'none';
+    if (opts.link) $('lobby-link').value = opts.link;
+    $('lobby-start').style.display = opts.start ? 'block' : 'none';
+    $('lobby-help').style.display = opts.help === false ? 'none' : 'block';
+  }
+  function leaveOnline(msg) {
+    const wasPlaying = G.mode === 'play' || G.mode === 'over';
+    Net.close(); G.net = null;
+    $('lobby').classList.remove('show'); $('pause').classList.remove('show'); $('over').classList.remove('show');
+    document.exitPointerLock && document.exitPointerLock();
+    G.mode = 'menu'; $('menu').classList.add('show');
+    if (history.replaceState) history.replaceState(null, '', location.pathname + location.search);
+    if (msg && wasPlaying) setTimeout(() => showMsg(msg, '', '#ff8a7a'), 50);
+    if (msg) $('online').textContent = 'PLAY WITH A FRIEND  ·  ' + msg.toLowerCase();
+  }
+  // both browsers start the same match; firstServer is in the sender's frame (0 = sender)
+  function beginOnlineMatch(firstServerLocal) {
+    Snd.init();
+    $('lobby').classList.remove('show'); $('menu').classList.remove('show'); $('over').classList.remove('show');
+    G.slowmo = false;
+    G.mode = 'play';
+    newMatch(firstServerLocal);
+    renderer.domElement.requestPointerLock();
+    // the guest's browser won't grab the mouse without a click: prompt for one
+    setTimeout(() => {
+      if (locked || G.mode !== 'play') return;
+      $('pause-title').textContent = 'CLICK TO PLAY';
+      $('pause-tag').textContent = 'Your friend started the match — click to take control of your paddle';
+      $('pause').classList.add('show');
+    }, 400);
+  }
+  function hostStartMatch() {
+    const fs = Math.random() < 0.5 ? 0 : 1;
+    Net.send({ t: 'start', firstServer: fs, bestOf: G.bestOf, pace: G.pace });
+    beginOnlineMatch(fs);
+  }
+  $('online').addEventListener('click', async () => {
+    Snd.init();
+    $('online').textContent = 'PLAY WITH A FRIEND';
+    lobby('Setting up your table…', { help: true });
+    try {
+      const id = await Net.host();
+      G.net = { role: 'host' };
+      const link = location.origin + location.pathname + '#join=' + id;
+      lobby('Send this link to your friend, then wait here for them to join…', { link });
+    } catch (e) { lobby('Could not reach the connection service. Check your internet and try again.'); }
+  });
+  $('lobby-copy').addEventListener('click', () => {
+    const inp = $('lobby-link'); inp.select();
+    (navigator.clipboard ? navigator.clipboard.writeText(inp.value) : Promise.reject()).then(
+      () => { $('lobby-copy').textContent = 'Copied!'; setTimeout(() => ($('lobby-copy').textContent = 'Copy link'), 1500); },
+      () => document.execCommand && document.execCommand('copy'));
+  });
+  $('lobby-start').addEventListener('click', hostStartMatch);
+  $('lobby-cancel').addEventListener('click', () => leaveOnline());
+
+  Net.on('connected', () => {
+    if (Net.role === 'host') lobby('Your friend joined! Press Start when you are both ready.', { start: true, help: false });
+    else lobby('Connected! Waiting for your friend to start the match…', { help: false });
+  });
+  Net.on('closed', () => { if (G.net) leaveOnline('Friend disconnected'); });
+  Net.on('bye', () => { if (G.net) leaveOnline('Friend left the game'); });
+  Net.on('error', (e) => {
+    if (!G.net && Net.role !== 'guest') return;
+    const why = e && e.type === 'peer-unavailable' ? 'That invite link has expired or your friend closed the game.' : 'Connection problem: ' + ((e && e.type) || 'unknown') + '.';
+    lobby(why, { help: false });
+  });
+  Net.on('start', (m) => {
+    G.bestOf = m.bestOf; G.pace = m.pace;
+    beginOnlineMatch(m.firstServer === 0 ? 1 : 0);
+  });
+  Net.on('rematch', () => { if (Net.role === 'host' && G.mode === 'over') hostStartMatch(); });
+  Net.on('pad', (m) => { remote.p = mir(m.p); remote.bh = m.bh || 0; });
+  Net.on('toss', (m) => {
+    if (G.mode !== 'play' || !(G.phase === 'serve' && G.server === 1)) return;
+    toss(1); ball.p = mir(m.p); ball.v = mir(m.v); ball.w = v3();
+  });
+  Net.on('hit', (m) => {
+    if (G.mode !== 'play') return;
+    if (G.phase === 'serve' && G.server === 1) toss(1);           // their toss message was skipped
+    if (G.phase !== 'toss' && G.phase !== 'rally') return;
+    ball.p = mir(m.p); ball.v = mir(m.v); ball.w = mir(m.w);
+    ai.swing = 1;
+    Snd.paddle(len(ball.v), clamp(ball.p.x, -1, 1));
+    showShot(oppName(), describeShot(ball));
+    onPaddle(1);
+    // catch the ball up by the time the message spent travelling
+    let t = Math.min(0.25, Net.rtt / 2) * G.timeScale;
+    while (t > 1e-6) {
+      const h = Math.min(0.001, t), bPrev = cp(ball.p);
+      PHYS.step(ball, h, worldEvent);
+      paddleContact(bPrev, 1, 1);
+      t -= h;
+    }
+    trailPts.length = 0;
+  });
+  Net.on('point', (m) => award(m.winner === 0 ? 1 : 0, swapNames(m.reason), true));
+  Net.on('let', () => { if (G.phase === 'rally' || G.phase === 'toss') letServe(true); });
+
+  // opened an invite link?
+  (function checkInvite() {
+    const m = location.hash.match(/join=([A-Za-z0-9_-]+)/);
+    if (!m) return;
+    G.net = { role: 'guest' };
+    $('menu').classList.remove('show');
+    lobby('Connecting to your friend…', { help: false });
+    Net.join(m[1]).catch(() => {});
+  })();
+
   // menu wiring
   document.querySelectorAll('[data-diff]').forEach((b) => b.addEventListener('click', () => {
     G.diff = +b.dataset.diff;
@@ -1059,15 +1202,23 @@
   setSens(G.sens, false);
   $('sens').addEventListener('input', (e) => setSens(+e.target.value, false));
   $('start').addEventListener('click', startGame);
-  $('again').addEventListener('click', startGame);
-  $('tomenu').addEventListener('click', () => { $('over').classList.remove('show'); $('menu').classList.add('show'); G.mode = 'menu'; });
+  $('again').addEventListener('click', () => {
+    if (!G.net) return startGame();
+    if (Net.role === 'host') hostStartMatch();
+    else { Net.send({ t: 'rematch' }); $('over-sub').textContent = 'Asked your friend for a rematch…'; }
+  });
+  $('tomenu').addEventListener('click', () => { if (G.net) return leaveOnline(); $('over').classList.remove('show'); $('menu').classList.add('show'); G.mode = 'menu'; });
   $('resume').addEventListener('click', () => renderer.domElement.requestPointerLock());
-  $('quit').addEventListener('click', () => { $('pause').classList.remove('show'); $('menu').classList.add('show'); G.mode = 'menu'; });
+  $('quit').addEventListener('click', () => { if (G.net) return leaveOnline(); $('pause').classList.remove('show'); $('menu').classList.add('show'); G.mode = 'menu'; });
 
   // input
   document.addEventListener('pointerlockchange', () => {
     locked = document.pointerLockElement === renderer.domElement;
-    if (G.mode === 'play') $('pause').classList.toggle('show', !locked);
+    if (G.mode === 'play') {
+      $('pause').classList.toggle('show', !locked);
+      $('pause-title').textContent = G.net ? 'CLICK TO PLAY' : 'PAUSED';
+      $('pause-tag').textContent = G.net ? 'Online match keeps running — grab the mouse to control your paddle' : 'Click resume to grab the mouse again';
+    }
   });
   renderer.domElement.addEventListener('click', () => { if (G.mode === 'play' && !locked) renderer.domElement.requestPointerLock(); });
   addEventListener('mousemove', (e) => {
@@ -1102,7 +1253,7 @@
   addEventListener('keydown', (e) => {
     if (G.mode !== 'play') return;
     if (e.code === 'Space') { e.preventDefault(); if (G.phase === 'serve' && G.server === 0 && G.phaseT > 0.3) startAutoServe(); }
-    if (e.code === 'KeyQ') G.slowmo = !G.slowmo;
+    if (e.code === 'KeyQ' && !G.net) G.slowmo = !G.slowmo;
     if (e.code === 'BracketLeft' || e.code === 'Minus' || e.code === 'NumpadSubtract') setSens(G.sens - 0.02, true);
     if (e.code === 'BracketRight' || e.code === 'Equal' || e.code === 'NumpadAdd') setSens(G.sens + 0.02, true);
   });
@@ -1121,7 +1272,7 @@
     last = now;
     G.timeScale = (G.slowmo ? 0.3 : 1) * G.pace;
     const dt = rdt * G.timeScale;
-    if (G.mode === 'play' && locked) { update(dt); hudTick(rdt); }
+    if (G.mode === 'play' && (locked || G.net)) { update(dt); hudTick(rdt); }
     else if (G.mode === 'menu') {
       // idle attract: slow camera drift
       for (const m of [hand, thumb, forearm, sleeve, padMesh]) m.visible = false;
@@ -1141,5 +1292,5 @@
   requestAnimationFrame(frame);
 
   // exposed for debugging / automated tests
-  window.__spin = { G, ball, pad, ai, update, render, startGame, newMatch, toss, mouse, DIFFS, solvePitch, faceNormal, camera, renderer, scene, TUNE, setLocked: (v) => (locked = v) };
+  window.__spin = { G, ball, pad, ai, update, render, startGame, newMatch, toss, mouse, DIFFS, solvePitch, faceNormal, camera, renderer, scene, TUNE, setLocked: (v) => (locked = v), remote, mir };
 })();
