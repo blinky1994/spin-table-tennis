@@ -1113,7 +1113,7 @@
       const id = await Net.host();
       G.net = { role: 'host' };
       const link = location.origin + location.pathname + '#join=' + id + '&r=' + Net.broker;
-      lobby('Send this link to your friend, then wait here for them to join…', { link });
+      lobby('Send this link to your friend, then come back to this tab and keep it open until they join (browsers put background tabs to sleep).', { link });
     } catch (e) { lobby('Could not reach the connection service. Check your internet and try again.'); }
   });
   $('lobby-copy').addEventListener('click', () => {
@@ -1131,7 +1131,18 @@
     else lobby('Connected' + via + '. Waiting for your friend to start the match…', { help: false });
   });
   Net.on('status', (t) => { if (!Net.connected && Net.role === 'guest') lobby(t, { help: false }); });
-  Net.on('failed', () => lobby('Could not connect to your friend. Make sure they still have the game open on the invite screen, then open the link again.', { help: false }));
+  Net.on('failed', (e) => {
+    const r = e && e.relay;
+    const msg = r === 'unreachable'
+      ? "Can't connect: this network blocks both the direct link and the relay servers (ports 8081/8084/8884). Try another network (e.g. a phone hotspot), or turn off a VPN/firewall/antivirus web shield."
+      : r === 'reached'
+        ? "Reached the relay, but your friend's game didn't answer. Ask them to click back into their game tab (it may have gone to sleep) or make a new invite link, then open it again. Still trying…"
+        : "Could not connect yet. Still trying…";
+    lobby(msg, { help: false });
+    $('lobby-help').style.display = 'block';
+    const lg = Net.log, hellos = lg.filter((l) => l.endsWith('hello sent')).length;
+    $('lobby-help').textContent = 'Connection log: ' + lg.filter((l) => !l.endsWith('hello sent')).slice(-6).join('  ·  ') + (hellos ? `  ·  ${hellos} hellos sent, no answer` : '');
+  });
   Net.on('closed', () => { if (G.net) leaveOnline('Friend disconnected'); });
   Net.on('bye', () => { if (G.net) leaveOnline('Friend left the game'); });
   Net.on('error', (e) => {

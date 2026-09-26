@@ -11,13 +11,16 @@
 const Net = (() => {
   const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
   const DIRECT_TIMEOUT = 4000;   // ms before the guest falls back to the relay
-  const GIVE_UP = 20000;         // ms before reporting failure
+  const GIVE_UP = 45000;         // ms before reporting failure (keeps trying quietly after)
 
   let peer = null, conn = null, mq = null, role = null, id = null;
   let transport = null;          // 'direct' | 'relay' | null
   let pingTimer = null, helloTimer = null, fallbackTimer = null, giveUpTimer = null;
   let rtt = 0.08, lastRx = 0;
+  let relayState = 'none';        // guest: 'none' | 'reached' | 'unreachable'
   const handlers = {};
+  const T0 = performance.now(), log = [];
+  const L = (msg) => { log.push(Math.round(performance.now() - T0) + 'ms ' + msg); if (log.length > 200) log.shift(); };
 
   function on(type, fn) { (handlers[type] = handlers[type] || []).push(fn); }
   function emit(type, msg) { for (const fn of handlers[type] || []) fn(msg); }
@@ -42,6 +45,7 @@ const Net = (() => {
 
   function becomeConnected(kind) {
     if (transport) return;
+    L('CONNECTED ' + kind);
     transport = kind;
     clearTimeout(fallbackTimer); clearTimeout(giveUpTimer); clearInterval(helloTimer);
     if (kind === 'relay') rtt = 0.2;
@@ -74,23 +78,27 @@ const Net = (() => {
   function openBroker(idx, listenDir) {
     return new Promise((resolve, reject) => {
       if (typeof mqtt === 'undefined') { reject(new Error('relay library missing')); return; }
+      L('relay connecting ' + BROKERS[idx].split('/')[2]);
       const client = mqtt.connect(BROKERS[idx], {
         clientId: 'spintt_' + Math.random().toString(36).slice(2, 12),
-        clean: true, connectTimeout: 5000, reconnectPeriod: 2000, keepalive: 30,
+        clean: true, connectTimeout: 5000, reconnectPeriod: 2000, keepalive: 120,
       });
       let settled = false;
       const t = setTimeout(() => { if (!settled) { settled = true; try { client.end(true); } catch (e) {} reject(new Error('timeout')); } }, 6000);
       client.on('connect', () => {
+        L('relay connected ' + BROKERS[idx].split('/')[2]);
         if (settled) return;
         client.subscribe(topic(listenDir), { qos: 0 }, (err) => {
           if (settled) return;
           settled = true; clearTimeout(t);
+          L('relay subscribed ' + BROKERS[idx].split('/')[2] + ' ' + topic(listenDir));
           if (err) { try { client.end(true); } catch (e) {} reject(err); return; }
           resolve(client);
         });
       });
       client.on('message', (_t, payload) => {
         let m; try { m = JSON.parse(payload.toString()); } catch (e) { return; }
+        if (m.t === 'hello' || m.t === 'welcome') L('relay got ' + m.t + ' via ' + BROKERS[idx].split('/')[2]);
         if (m.t === 'hello' && role === 'host') {          // a guest reached us through this broker
           if (!transport) { mq = client; relayPublish({ t: 'welcome' }); becomeConnected('relay'); dropOtherBrokers(); }
           else if (mq === client) relayPublish({ t: 'welcome' });
@@ -164,23 +172,25 @@ const Net = (() => {
   function join(hostId, preferredBroker = 0) {
     close();
     role = 'guest'; id = hostId;
+    L('join ' + hostId + ' broker ' + preferredBroker);
     emit('status', 'Connecting directly…');
     // connect to the relay broker right away (in the background) so a fallback is instant
+    relayState = 'none';
     const relayReady = guestRelay(Math.min(BROKERS.length - 1, Math.max(0, preferredBroker | 0)));
-    relayReady.catch(() => {});
+    relayReady.then(() => { relayState = 'reached'; }, () => { relayState = 'unreachable'; L('relay unreachable'); });
     let relayStarted = false;
     const startRelay = () => {
       if (transport || relayStarted) return;
       relayStarted = true;
       emit('status', 'Direct connection blocked by the network — switching to relay…');
       relayReady.then(() => {
-        const hello = () => { if (!transport) relayPublish({ t: 'hello' }); };
+        const hello = () => { if (!transport) { L('hello sent'); relayPublish({ t: 'hello' }); } };
         hello(); clearInterval(helloTimer); helloTimer = setInterval(hello, 500);
       }).catch(() => {});
     };
     if (/[?&]relay\b/.test(location.search)) {   // ?relay forces the relay (testing / stubborn networks)
       startRelay();
-      giveUpTimer = setTimeout(() => { if (!transport) emit('failed'); }, GIVE_UP);
+      giveUpTimer = setTimeout(() => { if (!transport) emit('failed', { relay: relayState }); }, GIVE_UP);
       return;
     }
     try {
@@ -189,7 +199,7 @@ const Net = (() => {
       peer.on('error', (e) => { if (e.type === 'peer-unavailable') emit('status', 'Direct link unavailable — trying relay…'); startRelay(); });
     } catch (e) { startRelay(); }
     fallbackTimer = setTimeout(startRelay, DIRECT_TIMEOUT);
-    giveUpTimer = setTimeout(() => { if (!transport) emit('failed'); }, GIVE_UP);
+    giveUpTimer = setTimeout(() => { if (!transport) emit('failed', { relay: relayState }); }, GIVE_UP);
   }
 
   function send(m) {
@@ -221,6 +231,7 @@ const Net = (() => {
     get rtt() { return rtt; },
     get transport() { return transport; },
     get broker() { return bestBroker; },
+    get log() { return log.slice(); },
     get connected() { return !!transport; },
   };
 })();
