@@ -240,7 +240,7 @@
     { name: 'Pro', move: 4.6, react: 0.13, err: 0.02, reach: 0.25, power: 1.0, spin: 1.0, pace: [5.2, 8.5] },
   ];
   const G = {
-    mode: 'menu', diff: 1, bestOf: 3, sens: 0.2, timeScale: 1, serveAim: { x: 0, z: -0.85 }, serveSpin: -0.4, autoServe: null, slowmo: false, angleMode: 'help', pace: 0.7,   // Helped paddle angle (Manual/Assisted code paths kept but not exposed)
+    mode: 'menu', diff: 1, bestOf: 3, sens: 0.2, timeScale: 1, serveAim: { x: 0, z: -0.85 }, serveSpin: -0.4, autoServe: null, slowmo: false, angleMode: 'help', pace: 1,   // Helped paddle angle (Manual/Assisted code paths kept but not exposed)
     score: [0, 0], games: [0, 0], firstServer: 0, server: 0,
     phase: 'serve', phaseT: 0, rally: null, rallyLen: 0, lastEvent: 0, time: 0,
     matchOver: false, pointMsg: '',
