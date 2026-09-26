@@ -261,7 +261,17 @@
   const mir = (a) => v3(-a.x, a.y, -a.z);            // 180° turn about the vertical axis (also right for spin)
   const netAuthority = () => ball.p.z > 0;           // the player whose half the ball is on rules on it
   const swapNames = (t) => String(t).replace(/\bYou\b/g, '\u0001').replace(/\bFriend\b/g, 'You').replace(/\u0001/g, 'Friend');
-  const remote = { p: null, bh: 0 };
+  const remote = { p: null, bh: 0, samples: [], offset: null };
+  // Online: when a friend's hit arrives we jump the *physics* ball forward by the network delay,
+  // but the *drawn* ball glides from where you last saw it (offset decays in ~0.15 s).
+  let vis = v3();
+  const VIS_TAU = 0.15;
+  function glideFrom(before) {
+    vis = sub(before, ball.p);
+    const l = len(vis);
+    if (l > 2.5) vis = scl(vis, 2.5 / l);
+  }
+  const shownBall = () => add(ball.p, vis);
 
   function nextServer() {
     const total = G.score[0] + G.score[1];
@@ -304,6 +314,7 @@
   }
 
   function startServe() {
+    vis = v3();
     G.phase = 'serve'; G.phaseT = 0; G.rally = null; G.rallyLen = 0;
     ai.holdT = 0; ai.plan = null; ai.serveX = rand(-0.35, 0.35);
     ball.v = v3(); ball.w = v3();
@@ -722,9 +733,12 @@
     const D = DIFFS[G.diff];
     ai.prev = cp(ai.p);
     if (G.net) {   // online: the opponent is your friend's paddle, streamed and smoothed
-      if (remote.p) ai.p = lerpV(ai.p, remote.p, 1 - Math.exp(-18 * dt));
-      ai.bhSide = remote.bh > 0.5 ? 1 : 0;
-      ai.bh = (ai.bh || 0) + (remote.bh - (ai.bh || 0)) * (1 - Math.exp(-12 * dt));
+      const rp = remotePaddleNow();
+      if (rp) {
+        ai.p = lerpV(ai.p, rp.p, 1 - Math.exp(-35 * dt));   // light extra smoothing only
+        ai.bhSide = rp.bh > 0.5 ? 1 : 0;
+        ai.bh = (ai.bh || 0) + (rp.bh - (ai.bh || 0)) * (1 - Math.exp(-12 * dt));
+      }
       ai.v = scl(sub(ai.p, ai.prev), 1 / Math.max(dt, 1e-4));
       ai.swing = Math.max(0, ai.swing - dt * 4);
       return;
@@ -807,9 +821,9 @@
     }
     if (G.phase === 'point' && G.phaseT > 1.8) afterPoint();
 
-    trailPts.push(cp(ball.p));
+    trailPts.push(shownBall());
     if (trailPts.length > TRAIL_N) trailPts.shift();
-    if (G.net) { G.netSendT = (G.netSendT || 0) - dt; if (G.netSendT <= 0) { G.netSendT = 0.033; Net.send({ t: 'pad', p: cp(pad.p), bh: pad.bh }); } }
+    if (G.net) { G.netSendT = (G.netSendT || 0) - dt; if (G.netSendT <= 0) { G.netSendT = 0.033; Net.send({ t: 'pad', p: cp(pad.p), bh: pad.bh, ts: performance.now() }); } }
   }
 
   // ===================================================================
@@ -828,18 +842,20 @@
   }
 
   function render(dt) {
-    // ball + spin
-    ballMesh.position.set(ball.p.x, ball.p.y, ball.p.z);
+    // ball + spin (drawn with the online glide offset, which decays to zero)
+    if (vis.x || vis.y || vis.z) { vis = scl(vis, Math.exp(-dt / VIS_TAU)); if (len(vis) < 0.002) vis = v3(); }
+    const bp = shownBall();
+    ballMesh.position.set(bp.x, bp.y, bp.z);
     const wl = len(ball.w);
     if (wl > 0.01) {
       axis.set(ball.w.x / wl, ball.w.y / wl, ball.w.z / wl);
       q.setFromAxisAngle(axis, Math.min(wl * dt, 1.2));
       ballMesh.quaternion.premultiply(q);
     }
-    const onTable = Math.abs(ball.p.x) < TABLE.hw && Math.abs(ball.p.z) < TABLE.hl && ball.p.y > TOP;
+    const onTable = Math.abs(bp.x) < TABLE.hw && Math.abs(bp.z) < TABLE.hl && bp.y > TOP;
     const surf = onTable ? TOP + 0.001 : 0.002;
-    blob.position.set(ball.p.x, surf, ball.p.z);
-    const hgt = Math.max(0, ball.p.y - surf);
+    blob.position.set(bp.x, surf, bp.z);
+    const hgt = Math.max(0, bp.y - surf);
     blob.scale.setScalar(1 + hgt * 1.5);
     blob.material.opacity = clamp(0.5 - hgt * 0.35, 0.08, 0.5);
     const arr = trailGeo.attributes.position.array;
@@ -1087,6 +1103,7 @@
   // both browsers start the same match; firstServer is in the sender's frame (0 = sender)
   function beginOnlineMatch(firstServerLocal) {
     Snd.init();
+    remote.samples = []; remote.offset = null; remote.p = null;
     $('lobby').classList.remove('show'); $('menu').classList.remove('show'); $('over').classList.remove('show');
     G.slowmo = false;
     G.mode = 'play';
@@ -1155,15 +1172,46 @@
     beginOnlineMatch(m.firstServer === 0 ? 1 : 0);
   });
   Net.on('rematch', () => { if (Net.role === 'host' && G.mode === 'over') hostStartMatch(); });
-  Net.on('pad', (m) => { remote.p = mir(m.p); remote.bh = m.bh || 0; });
+  Net.on('pad', (m) => {
+    const now = performance.now();
+    if (typeof m.ts !== 'number') { remote.p = mir(m.p); remote.bh = m.bh || 0; return; }
+    const off = now - m.ts;   // their clock -> ours (+ travel time); the minimum is the fastest packet
+    remote.offset = remote.offset == null ? off : Math.min(off, remote.offset + 0.5);
+    const buf = remote.samples;
+    if (buf.length && m.ts <= buf[buf.length - 1].t) return;   // stale / out of order
+    buf.push({ t: m.ts, p: mir(m.p), bh: m.bh || 0 });
+    if (buf.length > 60) buf.shift();
+  });
+  // their paddle as it was INTERP ms ago, interpolated between received samples (absorbs bursts/gaps)
+  function remotePaddleNow() {
+    const buf = remote.samples;
+    if (!buf.length || remote.offset == null) return remote.p ? { p: remote.p, bh: remote.bh } : null;
+    const INTERP = Net.transport === 'relay' ? 170 : 90;
+    const t = performance.now() - remote.offset - INTERP;
+    if (t <= buf[0].t) return { p: buf[0].p, bh: buf[0].bh };
+    for (let i = buf.length - 1; i > 0; i--) {
+      const a = buf[i - 1], b = buf[i];
+      if (t >= a.t && t <= b.t) {
+        const k = (t - a.t) / Math.max(1, b.t - a.t);
+        return { p: lerpV(a.p, b.p, k), bh: lerp(a.bh, b.bh, k) };
+      }
+    }
+    // newer than anything received: extrapolate briefly from the last two samples, then hold
+    const b = buf[buf.length - 1], a = buf[buf.length - 2] || b;
+    const ahead = Math.min(80, t - b.t), span = Math.max(1, b.t - a.t);
+    return { p: add(b.p, scl(sub(b.p, a.p), ahead / span)), bh: b.bh };
+  }
   Net.on('toss', (m) => {
     if (G.mode !== 'play' || !(G.phase === 'serve' && G.server === 1)) return;
+    const before = shownBall();
     toss(1); ball.p = mir(m.p); ball.v = mir(m.v); ball.w = v3();
+    glideFrom(before);
   });
   Net.on('hit', (m) => {
     if (G.mode !== 'play') return;
     if (G.phase === 'serve' && G.server === 1) toss(1);           // their toss message was skipped
     if (G.phase !== 'toss' && G.phase !== 'rally') return;
+    const before = shownBall();
     ball.p = mir(m.p); ball.v = mir(m.v); ball.w = mir(m.w);
     ai.swing = 1;
     Snd.paddle(len(ball.v), clamp(ball.p.x, -1, 1));
@@ -1177,6 +1225,7 @@
       paddleContact(bPrev, 1, 1);
       t -= h;
     }
+    glideFrom(before);
     trailPts.length = 0;
   });
   Net.on('point', (m) => award(m.winner === 0 ? 1 : 0, swapNames(m.reason), true));
